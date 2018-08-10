@@ -1,0 +1,437 @@
+/// Calculate course credits
+
+DELIMITER $$
+
+CREATE PROCEDURE get_tot_credits(
+IN course_id varchar(10),
+OUT credits DECIMAL(4,2))
+BEGIN
+DECLARE ll,tt,pp DECIMAL(4,2);
+SELECT l into ll from courses where id=course_id;
+SELECT t into tt from courses where id=course_id;
+SELECT p into pp from courses where id=course_id;
+SET credits=0.5*pp;
+SET credits=credits+ll;
+SET credits=credits+tt;
+END $$
+DELIMITER ;
+
+INSERT INTO `courses`(`id`, `name`, `l`, `t`, `p`) VALUES ('id1','cname',1,2,2);
+set @a=0;
+call get_tot_credits('id1',@a);
+select @a;
+
+
+////////// Calculate Cgpa from student id
+
+
+DELIMITER $$
+
+CREATE PROCEDURE cal_CGPA(
+IN student_id varchar(10),
+OUT CGPA DECIMAL(4,2))
+BEGIN
+DECLARE tablename varchar(200);
+
+SELECT CONCAT("transcript_",student_id) into tablename;
+
+set @s1=CONCAT("select sum(credits) into @tot_credits from ", tablename ," where grade>4");
+prepare smt1 from @s1;
+execute smt1;
+deallocate prepare smt1;
+
+
+set @s2=CONCAT("select sum(credits*grade) into @tot from ", tablename ," where grade>4");
+prepare smt2 from @s2;
+execute smt2;
+deallocate prepare smt2;
+
+SET CGPA= @tot/@tot_credits;
+
+END $$
+DELIMITER ;
+
+
+set @b='';
+call cal_cgpa('2015csb',@b);
+select @b;
+
+
+// Calculate credit limit from student id
+
+
+DELIMITER $$
+
+CREATE PROCEDURE cal_creditlim(
+IN student_id varchar(10),
+OUT credit_lim DECIMAL(4,2))
+BEGIN
+
+DECLARE year_last integer;
+DECLARE sem_last varchar(10);
+
+DECLARE year_seclast integer;
+DECLARE sem_seclast varchar(10);
+
+DECLARE current_id integer;
+
+DECLARE tablename varchar(200);
+
+
+SELECT sem_id into current_id from semesters where status=1;
+
+IF current_id>=3 then
+
+    SELECT year into year_last from semesters where sem_id=current_id-1;
+    SELECT year into year_seclast from semesters where sem_id=current_id-2;
+
+    SELECT semester into sem_last from semesters where sem_id=current_id-1;
+    SELECT semester into sem_seclast from semesters where sem_id=current_id-2;
+
+    set credit_lim=0;
+
+    SELECT CONCAT("transcript_",student_id) into tablename;
+
+    set @s1=CONCAT("select sum(credits) into @tot_credits1 from ", tablename ," where grade>4 and course_year=",year_last," and course_sem=",sem_last);
+    prepare smt1 from @s1;
+    execute smt1;
+    deallocate prepare smt1;
+
+
+    set @s2=CONCAT("select sum(credits) into @tot_credits2 from ", tablename ," where grade>4 and course_year=",year_seclast," and course_sem=",sem_seclast);
+    prepare smt2 from @s2;
+    execute smt2;
+    deallocate prepare smt2;
+
+
+    set credit_lim=credit_lim+@tot_credits1;
+    set credit_lim=credit_lim+@tot_credits2;
+
+    set credit_lim=credit_lim/2;
+    set credit_lim=credit_lim*1.25;
+
+else
+  set credit_lim=24;
+END IF;
+
+END $$
+DELIMITER ;
+
+
+/////////////////////// Checking whether a student has completed all the prerequisites for a course.
+
+
+
+DELIMITER $$
+
+CREATE PROCEDURE has_comp_preq(
+IN student_id varchar(10),
+IN c_id varchar(10),
+OUT result tinyint)
+BEGIN
+
+DECLARE tablename varchar(200);
+
+SELECT CONCAT("transcript_",student_id) into tablename;
+
+set @s1=CONCAT("select count(*) into @preq_comp from ", tablename ,",prerequisite where prequisite_couse_id=course_id and original_couse_id=",c_id," and grade>4");
+prepare smt1 from @s1;
+execute smt1;
+deallocate prepare smt1;
+
+
+set @s2=CONCAT("select count(*) into @preq_tot from prerequisite where  original_couse_id=",c_id);
+prepare smt2 from @s2;
+execute smt2;
+deallocate prepare smt2;
+
+if @preq_tot=@preq_comp THEN
+  set result=1;
+else
+  set result=0;
+end if;
+
+END $$
+DELIMITER ;
+
+
+
+
+
+////////  Occupied Time Slot
+
+
+
+DELIMITER $$
+
+CREATE PROCEDURE is_slot_free(
+IN student_id varchar(10),
+IN c_id varchar(10),
+IN y integer,
+IN s varchar(10),
+OUT result tinyint)
+BEGIN
+
+Select time_slot_id into @tid from offered_courses where c_id=course_id and y=year and s=semester;
+
+Select count(*) into @no_clashes from course_registrations,offered_courses where student_entry_no=student_id and course_offered_id=course_id and year_course=year and semester_course=semester and time_slot_id=@tid and year=y and semester=s;
+
+if @no_clashes=0 THEN
+  set result=1;
+else
+  set result=0;
+end if;
+
+END $$
+DELIMITER ;
+
+
+/////// If a student has passed a course or not
+
+
+
+DELIMITER $$
+
+CREATE PROCEDURE has_passed(
+IN student_id varchar(10),
+IN c_id varchar(10),
+OUT result tinyint)
+BEGIN
+
+
+DECLARE tablename varchar(200);
+
+SELECT CONCAT("transcript_",student_id) into tablename;
+
+set @s1=CONCAT("select count(*) into @passed from ", tablename ," where course_id=",c_id," and grade>4");
+prepare smt1 from @s1;
+execute smt1;
+deallocate prepare smt1;
+
+
+if @passed=0 THEN
+  set result=1;
+else
+  set result=0;
+end if;
+
+END $$
+DELIMITER ;
+
+
+
+
+/////////// Total credits taken by a student in current year and semester
+
+
+
+DELIMITER $$
+
+CREATE PROCEDURE credits_taken(
+IN student_id varchar(10),
+OUT tot_credits_taken integer)
+BEGIN
+
+DECLARE y integer;
+DECLARE s varchar(10);
+DECLARE tablename varchar(200);
+
+SELECT year into y from semesters where status=1;
+SELECT semester into s from semesters where status=1;
+
+SELECT CONCAT("transcript_",student_id) into tablename;
+
+set @s1=CONCAT("select sum(credits) into @tot from ", tablename ," where course_year=",y," and course_sem=",s);
+prepare smt1 from @s1;
+execute smt1;
+deallocate prepare smt1;
+
+Set tot_credits_taken=@tot;
+
+END $$
+DELIMITER ;
+
+
+
+
+/////////
+
+// to get size of class of particular course
+
+DELIMITER $$
+
+CREATE PROCEDURE get_course_batch_size(
+IN course_id varchar(10),
+IN y integer,
+IN sem varchar(10),
+
+OUT size integer)
+BEGIN
+SELECT COUNT(*) into size from course_registrations where id=course_offered_id and y=year_course and sem=semester_course;
+END $$
+DELIMITER ;
+
+/////////////////////  to check if student's BATCH is allowed to register for course
+
+
+DELIMITER $$
+
+CREATE PROCEDURE check_student_batch_allowed(
+IN ent_num varchar(10),
+IN id varchar(10),
+IN y integer,
+IN sem varchar(10),
+
+OUT flag tinyint)
+BEGIN
+SELECT batch_year into @curr_batch from students where ent_num=entry_no;
+SELECT dept_name into @curr_dept from students where ent_num=entry_no;
+SELECT COUNT(*) into @ctr from batches_allowed where id=course_offered_id and y=year_course and sem=semester_course and @curr_batch=batch_year and @curr_dept=batch_dept;
+
+if @ctr=0 THEN
+  set flag=0;
+else
+  set flag=1;
+end if;
+
+END $$
+DELIMITER ;
+
+
+
+
+
+/////// Function to check whether a student can take a course or not
+
+
+
+DELIMITER $$
+
+CREATE PROCEDURE can_take(
+IN student_id varchar(10),
+IN c_id varchar(10),
+OUT result tinyint)
+BEGIN
+
+DECLARE y integer;
+DECLARE s varchar(10);
+
+SELECT year into y from semesters where status=1;
+SELECT semester into s from semesters where status=1;
+
+
+set @o1=0;
+call is_slot_free(student_id,c_id,y,s,@o1);
+select @o1;
+
+set @o2=0;
+call has_comp_preq(student_id,c_id,@o2);
+select @o2;
+
+set @course_credits=0;
+call get_tot_credits(c_id,@course_credits);
+
+set @credit_limit=0;
+call cal_creditlim(student_id,@credit_lim);
+
+set @credit_taken=0;
+call credits_taken(student_id,@credit_taken);
+
+set @tot=@credit_taken+@course_credits;
+
+if @tot<=@credit_limit THEN
+  set @o3=1;
+else
+  set @o3=0;
+end if;
+
+
+set @cg=0;
+call cal_CGPA(student_id,@cg);
+
+Select cgpa_required into @req_cg from offered_courses where course_id=c_id and year=y and semester=s;
+
+
+if @req_cg<=@cg THEN
+  set @o4=1;
+else
+  set @o4=0;
+end if;
+
+
+set @cur_batch_siz=10000;
+call get_course_batch_size(c_id,y,s,@cur_batch_siz);
+
+
+select student_limit into @s_lim from offered_courses where course_id=c_id and year=y and semester=s;
+
+
+if @cur_batch_siz<@s_lim THEN
+  set @o5=1;
+else
+  set @o5=0;
+end if;
+
+
+
+set @o6=0;
+call check_student_batch_allowed(student_id,c_id,y,s,@o6);
+select @o6;
+
+set @o7=0;
+call has_passed(student_id,c_id,@o7);
+select @o7;
+
+if ((o1=1) and (o2=1) and (o3=1) and (o4=1) and (o5=1) and (o6=1) and (o7=1)) THEN
+  set result=1;
+else
+  set result=0;
+end if;
+
+
+
+END $$
+DELIMITER ;
+
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+////////// function to check whether the course with given lecture hall and time_slot can be added
+
+
+
+DELIMITER $$
+
+CREATE PROCEDURE can_instructor_add_course(
+IN time_slot varchar(10),
+IN lec_hall varchar(10),
+OUT result tinyint)
+BEGIN
+
+DECLARE y integer;
+DECLARE s varchar(10);
+
+SELECT year into y from semesters where status=1;
+SELECT semester into s from semesters where status=1;
+
+Select count(*) into @count from offered_courses where year=y and semester=s and lecture_hall=lec_hall and time_slot_id=time_slot;
+
+if @count=0 THEN
+  set @result=1;
+else
+  set @result=0;
+end if;
+
+END $$
+DELIMITER ;
+
+
+
+
+
+/////////////////////////
